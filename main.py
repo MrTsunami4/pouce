@@ -1,17 +1,16 @@
 import logging
-import cv2
 import argparse
+import cv2
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, List
 
 import easyocr
 
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from selenium.webdriver.chrome.options import Options as ChromeOptions
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -22,7 +21,7 @@ class ScreenshotDriver:
     with a sequential prefix and timestamp for easy inspection.
     """
 
-    def __init__(self, driver: Any, out_dir: Path = Path("screenshots")):
+    def __init__(self, driver: webdriver.Remote, out_dir: Path = Path("screenshots")):
         self.driver = driver
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -108,45 +107,32 @@ class WrappedElement:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Automated Wikipedia screenshot and OCR"
-    )
-    parser.add_argument(
-        "--driver",
-        choices=["firefox", "chrome"],
-        default="firefox",
-        help="The browser driver to use (default: firefox)",
+        description="Automated web scraping with OCR annotation"
     )
     parser.add_argument(
         "--search",
+        type=str,
         default="Napoleon",
-        help="The search query for Wikipedia (default: Napoleon)",
+        help="Search term to use on Wikipedia (default: Napoleon)",
     )
     parser.add_argument(
-        "--headless",
-        action="store_true",
-        default=True,
-        help="Run the browser in headless mode (default: True)",
-    )
-    parser.add_argument(
-        "--no-headless",
-        action="store_false",
-        dest="headless",
-        help="Run the browser in windowed mode",
+        "--driver",
+        type=str,
+        choices=["firefox", "chrome"],
+        default="firefox",
+        help="Web driver to use (default: firefox)",
     )
     args = parser.parse_args()
 
+    # Initialize driver based on selection
     if args.driver == "firefox":
-        options = FirefoxOptions()
-        if args.headless:
-            options.add_argument("--headless")
+        options = webdriver.FirefoxOptions()
+        options.add_argument("--headless")
         raw_driver = webdriver.Firefox(options=options)
     elif args.driver == "chrome":
-        options = ChromeOptions()
-        if args.headless:
-            options.add_argument("--headless")
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")
         raw_driver = webdriver.Chrome(options=options)
-    else:
-        raise ValueError(f"Unsupported driver: {args.driver}")
 
     driver = ScreenshotDriver(raw_driver)
     reader = easyocr.Reader(["en"])
