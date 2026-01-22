@@ -1,0 +1,11 @@
+[project]
+name = "plfpy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "easyocr>=1.7.2",
+    "opencv-python>=4.13.0.90",
+    "selenium>=4.39.0",
+]
