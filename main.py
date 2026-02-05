@@ -103,7 +103,7 @@ class HandApp:
         return math.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
 
     @staticmethod
-    def count_fingers(hand) -> int:
+    def count_fingers(hand, handedness) -> int:
         """Return number of extended fingers using a simple landmark heuristic."""
         count = 0
 
