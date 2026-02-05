@@ -155,10 +155,10 @@ class HandApp:
     def draw(self, frame) -> None:
         if self.mode == "number":
             self._draw_finger_count(frame)
+            self._draw_finger_tips(frame)
+            self._draw_palms(frame)
         else:
             self._draw_energy_ball(frame)
-        self._draw_finger_tips(frame)
-        self._draw_palms(frame)
 
     def _draw_energy_ball(self, frame) -> None:
         if not self.state.landmarks:
