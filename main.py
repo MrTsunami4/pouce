@@ -6,6 +6,7 @@ from typing import Iterable, List, Optional, Tuple
 
 import cv2
 import mediapipe as mp
+import numpy as np
 
 THUMB_TIP = 4
 THUMB_IP = 3
@@ -21,6 +22,8 @@ class Config:
     pinch_threshold: float = 0.05
     radius_scale: float = 300.0
     camera_index: int = 0
+    brush_color: Tuple[int, int, int] = (0, 0, 255)
+    brush_thickness: int = 10
 
 
 @dataclass
@@ -32,6 +35,8 @@ class State:
     handedness: Optional[str] = None
     multi_hand_counts: List[Tuple[str, int]] = None
     multi_hand_landmarks: List[Iterable] = None
+    canvas: Optional[np.ndarray] = None
+    prev_brush_pos: Optional[Tuple[int, int]] = None
 
 
 class HandApp:
@@ -39,7 +44,12 @@ class HandApp:
         self.mode = mode
         self.config = config
         self.state = State(multi_hand_counts=[], multi_hand_landmarks=[])
-        self.window_name = "Finger Count" if mode == "number" else "Gesture Controller"
+        if mode == "number":
+            self.window_name = "Finger Count"
+        elif mode == "paint":
+            self.window_name = "Air Painter"
+        else:
+            self.window_name = "Gesture Controller"
 
     def on_hand_result(self, result, output_image, timestamp_ms) -> None:
         if self.mode == "number":
@@ -56,6 +66,8 @@ class HandApp:
         self.state.landmarks = hand
         self.state.handedness = self._get_handedness(result)
         self.state.distance = self._pinch_distance(hand)
+        if self.mode == "paint":
+            self.state.finger_count = self.count_fingers(hand, self.state.handedness)
 
     def _clear_state(self) -> None:
         self.state.landmarks = None
@@ -64,6 +76,7 @@ class HandApp:
         self.state.handedness = None
         self.state.multi_hand_counts = []
         self.state.multi_hand_landmarks = []
+        self.state.prev_brush_pos = None
 
     @staticmethod
     def _get_first_hand(result):
@@ -90,7 +103,7 @@ class HandApp:
         return math.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
 
     @staticmethod
-    def count_fingers(hand, handedness: Optional[str]) -> int:
+    def count_fingers(hand) -> int:
         """Return number of extended fingers using a simple landmark heuristic."""
         count = 0
 
@@ -157,8 +170,50 @@ class HandApp:
             self._draw_finger_count(frame)
             self._draw_finger_tips(frame)
             self._draw_palms(frame)
+        elif self.mode == "paint":
+            self._draw_canvas(frame)
+            self._draw_brush(frame)
         else:
             self._draw_energy_ball(frame)
+
+    def _draw_canvas(self, frame) -> None:
+        if self.state.canvas is not None:
+            # Create a mask of the non-zero pixels in the canvas
+            canvas_gray = cv2.cvtColor(self.state.canvas, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(canvas_gray, 10, 255, cv2.THRESH_BINARY)
+            mask_inv = cv2.bitwise_not(mask)
+
+            # Black out the area of the canvas in the frame
+            img_bg = cv2.bitwise_and(frame, frame, mask=mask_inv)
+            # Take only region of canvas from canvas image
+            img_fg = cv2.bitwise_and(self.state.canvas, self.state.canvas, mask=mask)
+
+            # Put canvas on frame
+            np.copyto(frame, cv2.add(img_bg, img_fg))
+
+    def _draw_brush(self, frame) -> None:
+        if not self.state.landmarks:
+            return
+
+        h, w = frame.shape[:2]
+        index = self.state.landmarks[INDEX_TIP]
+        ix, iy = int(index.x * w), int(index.y * h)
+
+        color = self.config.brush_color
+        if self.state.distance < self.config.pinch_threshold:
+            cv2.circle(frame, (ix, iy), self.config.brush_thickness, color, -1)
+        else:
+            cv2.circle(frame, (ix, iy), self.config.brush_thickness, color, 2)
+
+        cv2.putText(
+            frame,
+            "Brush",
+            (ix + 10, iy - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            1,
+        )
 
     def _draw_energy_ball(self, frame) -> None:
         if not self.state.landmarks:
@@ -274,18 +329,43 @@ class HandApp:
             )
 
     def process(self, frame) -> None:
-        if self.mode != "ball":
-            return
+        if self.mode == "ball":
+            is_pinching = (
+                self.state.distance < self.config.pinch_threshold
+                and self.state.landmarks is not None
+            )
+            if is_pinching and not self.state.was_pinching:
+                filename = f"screenshot_{int(time.time())}.png"
+                cv2.imwrite(filename, frame)
+                print(f"Screenshot saved: {filename}")
+            self.state.was_pinching = is_pinching
+        elif self.mode == "paint":
+            if self.state.canvas is None:
+                self.state.canvas = np.zeros_like(frame)
 
-        is_pinching = (
-            self.state.distance < self.config.pinch_threshold
-            and self.state.landmarks is not None
-        )
-        if is_pinching and not self.state.was_pinching:
-            filename = f"screenshot_{int(time.time())}.png"
-            cv2.imwrite(filename, frame)
-            print(f"Screenshot saved: {filename}")
-        self.state.was_pinching = is_pinching
+            if not self.state.landmarks:
+                self.state.prev_brush_pos = None
+                return
+
+            h, w = frame.shape[:2]
+            index = self.state.landmarks[INDEX_TIP]
+            ix, iy = int(index.x * w), int(index.y * h)
+
+            if self.state.distance < self.config.pinch_threshold:
+                if self.state.prev_brush_pos is not None:
+                    cv2.line(
+                        self.state.canvas,
+                        self.state.prev_brush_pos,
+                        (ix, iy),
+                        self.config.brush_color,
+                        self.config.brush_thickness,
+                    )
+                self.state.prev_brush_pos = (ix, iy)
+            else:
+                self.state.prev_brush_pos = None
+
+            if self.state.finger_count >= 5:
+                self.state.canvas = np.zeros_like(frame)
 
     def run(self) -> None:
         num_hands = 2 if self.mode == "number" else 1
@@ -305,6 +385,8 @@ class HandApp:
             start_time = time.monotonic()
             if self.mode == "ball":
                 print("System Ready. Pinch your fingers to take a screenshot!")
+            elif self.mode == "paint":
+                print("System Ready. Pinch to draw, show 5 fingers to clear!")
             else:
                 print("System Ready. Show fingers to display a number!")
 
@@ -347,9 +429,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Hand gesture controller")
     parser.add_argument(
         "--mode",
-        choices=["ball", "number"],
+        choices=["ball", "number", "paint"],
         default="ball",
-        help="Choose visualization mode (ball or number)",
+        help="Choose visualization mode (ball, number, or paint)",
     )
     return parser.parse_args()
 
