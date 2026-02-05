@@ -9,6 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Model files
 *.task
 screenshot_*
+*.pdf

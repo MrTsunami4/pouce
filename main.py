@@ -1,5 +1,6 @@
 import argparse
 import math
+import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -57,9 +58,9 @@ class HandUtils:
         return math.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
 
     @staticmethod
-    def count_fingers(hand) -> int:
-        """Return number of extended fingers using a landmark heuristic."""
-        count = 0
+    def get_finger_states(hand) -> List[bool]:
+        """Return a list of booleans indicating if each finger is extended."""
+        states = []
 
         thumb_tip = hand[FINGER_TIPS[0]]
         thumb_ip = hand[FINGER_PIPS[0]]
@@ -101,7 +102,7 @@ class HandUtils:
             > dist_xy(thumb_ip, palm_cx, palm_cy) + distance_margin
         )
         thumb_extended = thumb_extended and (abs(thumb_tip.x - palm_cx) > side_margin)
-        count += thumb_extended
+        states.append(bool(thumb_extended))
 
         # Check other fingers
         for mcp_idx, pip_idx, tip_idx in zip(
@@ -114,9 +115,14 @@ class HandUtils:
                 angle(mcp, pip, tip) > 160.0
                 and dist(tip, wrist) > dist(pip, wrist) + distance_margin
             )
-            count += finger_is_extended
+            states.append(bool(finger_is_extended))
 
-        return int(count)
+        return states
+
+    @staticmethod
+    def count_fingers(hand) -> int:
+        """Return number of extended fingers using a landmark heuristic."""
+        return sum(HandUtils.get_finger_states(hand))
 
 
 # --- Modes ---
@@ -449,6 +455,156 @@ class NumberMode(BaseMode):
             )
 
 
+class RockPaperScissorsMode(BaseMode):
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.landmarks = None
+        self.finger_states: List[bool] = []
+        self.state = "WAITING"  # WAITING, COUNTDOWN, SHOW_RESULT
+        self.timer_start = 0.0
+        self.player_move = "Unknown"
+        self.cpu_move = "Unknown"
+        self.result_text = ""
+        self.scores = {"Player": 0, "CPU": 0}
+
+    @property
+    def num_hands(self) -> int:
+        return 1
+
+    @property
+    def window_name(self) -> str:
+        return "Rock Paper Scissors"
+
+    @property
+    def intro_message(self) -> str:
+        return "Rock Paper Scissors! Show 0, 2, or 5 fingers."
+
+    def on_result(
+        self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int
+    ) -> None:
+        hand = HandUtils.get_first_hand(result)
+        if hand:
+            self.landmarks = hand
+            self.finger_states = HandUtils.get_finger_states(hand)
+        else:
+            self.landmarks = None
+            self.finger_states = []
+
+    def process(self, frame: np.ndarray) -> None:
+        current_time = time.time()
+        
+        if self.state == "WAITING":
+            if self.landmarks:
+                self.state = "COUNTDOWN"
+                self.timer_start = current_time
+        
+        elif self.state == "COUNTDOWN":
+            elapsed = current_time - self.timer_start
+            if elapsed >= 3.0:
+                self._play_round()
+                self.state = "SHOW_RESULT"
+                self.timer_start = current_time
+
+        elif self.state == "SHOW_RESULT":
+            elapsed = current_time - self.timer_start
+            if elapsed >= 3.0:
+                self.state = "WAITING"
+                self.player_move = "Unknown"
+                self.cpu_move = "Unknown"
+                self.result_text = ""
+
+    def _play_round(self):
+        count = sum(self.finger_states)
+        
+        # Improved detection logic: Rock (0-1), Scissors (2-3), Paper (5)
+        if count in [0, 1]:
+            self.player_move = "Rock"
+        elif count in [2, 3]:
+            # Specifically check if index and middle are extended for Scissors
+            # FINGER_TIPS = [THUMB, INDEX, MIDDLE, RING, PINKY]
+            if self.finger_states[1] and self.finger_states[2]:
+                self.player_move = "Scissors"
+            else:
+                self.player_move = "Unknown"
+        elif count == 5:
+            self.player_move = "Paper"
+        else:
+            self.player_move = "Unknown"
+
+        self.cpu_move = random.choice(["Rock", "Paper", "Scissors"])
+
+        if self.player_move == "Unknown":
+            self.result_text = "Invalid Move!"
+            return
+
+        if self.player_move == self.cpu_move:
+            self.result_text = "Draw!"
+        elif (self.player_move == "Rock" and self.cpu_move == "Scissors") or \
+             (self.player_move == "Paper" and self.cpu_move == "Rock") or \
+             (self.player_move == "Scissors" and self.cpu_move == "Paper"):
+            self.result_text = "You Win!"
+            self.scores["Player"] += 1
+        else:
+            self.result_text = "CPU Wins!"
+            self.scores["CPU"] += 1
+
+    def draw(self, frame: np.ndarray) -> None:
+        h, w = frame.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        
+        self._draw_debug(frame)
+
+        # Draw Score
+        score_str = f"Player: {self.scores['Player']}  CPU: {self.scores['CPU']}"
+        cv2.putText(frame, score_str, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+        if self.state == "WAITING":
+            cv2.putText(frame, "Show hand to start", (center_x - 150, center_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
+
+        elif self.state == "COUNTDOWN":
+            elapsed = time.time() - self.timer_start
+            count = 3 - int(elapsed)
+            if count > 0:
+                cv2.putText(frame, str(count), (center_x - 20, center_y), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 5)
+            else:
+                 cv2.putText(frame, "GO!", (center_x - 60, center_y), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 0), 5)
+
+        elif self.state == "SHOW_RESULT":
+            cv2.putText(frame, f"You: {self.player_move}", (50, h - 100), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, f"CPU: {self.cpu_move}", (w - 300, h - 100), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            
+            color = (255, 255, 255)
+            if "Win" in self.result_text: color = (0, 255, 0)
+            elif "CPU Wins" in self.result_text: color = (0, 0, 255)
+            
+            text_size = cv2.getTextSize(self.result_text, cv2.FONT_HERSHEY_SIMPLEX, 2, 3)[0]
+            text_x = (w - text_size[0]) // 2
+            cv2.putText(frame, self.result_text, (text_x, center_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, color, 3)
+
+    def _draw_debug(self, frame: np.ndarray) -> None:
+        if not self.landmarks:
+            return
+
+        h, w = frame.shape[:2]
+        count = sum(self.finger_states)
+        cv2.putText(frame, f"Fingers: {count}", (20, h - 20), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        for idx, extended in enumerate(self.finger_states):
+            lm_idx = FINGER_TIPS[idx]
+            lm = self.landmarks[lm_idx]
+            x, y = int(lm.x * w), int(lm.y * h)
+            color = (0, 255, 0) if extended else (0, 0, 255)
+            cv2.circle(frame, (x, y), 8, color, -1)
+            cv2.circle(frame, (x, y), 10, (255, 255, 255), 1)
+
+
 # --- Main Application ---
 class HandApp:
     def __init__(self, mode: BaseMode) -> None:
@@ -501,9 +657,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Hand gesture controller")
     parser.add_argument(
         "--mode",
-        choices=["ball", "number", "paint"],
+        choices=["ball", "number", "paint", "rps"],
         default="ball",
-        help="Choose visualization mode (ball, number, or paint)",
+        help="Choose visualization mode (ball, number, paint, or rps)",
     )
     return parser.parse_args()
 
@@ -516,6 +672,7 @@ def main() -> None:
         "ball": BallMode,
         "number": NumberMode,
         "paint": PaintMode,
+        "rps": RockPaperScissorsMode,
     }
     
     mode_class = modes.get(args.mode, BallMode)

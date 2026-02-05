@@ -1,83 +1,103 @@
 #import "@preview/diatypst:0.9.1": *
 
 #show: slides.with(
-  title: "Pouce",
-  subtitle: "Hand Gesture Controller using MediaPipe",
+  title: "Projet Pouce",
+  subtitle: "Contrôle gestuel en temps réel avec MediaPipe",
   date: "05.02.2026",
   title-color: blue,
   ratio: 16 / 9,
-  layout: "small",
+  layout: "medium",
   toc: true,
   count: "dot",
   footer: true,
 )
 
-= Introduction
+= Rappel du contexte
 
-== What is Pouce?
+== Pourquoi "Pouce" ?
 
-*Pouce* is a real-time hand gesture recognition and visualization tool.
+L'objectif est de créer une interface homme-machine (IHM) naturelle et sans contact.
 
-- Built with #link("https://google.github.io/mediapipe/")[MediaPipe] for robust hand landmark detection.
-- Uses #link("https://opencv.org/")[OpenCV] for interactive feedback and visualization.
-- Written in Python, managed with `uv`.
+- *Interaction intuitive* : Utilisation des mains pour interagir avec le système.
+- *Accessibilité* : Une alternative aux périphériques classiques (souris/clavier).
+- *Cas d'usage* : Contrôle multimédia, dessin virtuel, jeux, environnements stériles (médical).
 
-The project name "Pouce" (French for "Thumb") highlights the central role of finger interaction in the system.
+= Données utilisées
 
-== Core Technologies
+== MediaPipe Hand Landmarker
 
-/ *MediaPipe*: Provides a high-fidelity hand landmarker model that tracks 21 3D landmarks.
-/ *OpenCV*: Handles camera stream processing and UI rendering.
-/ *NumPy*: Powers the canvas and mathematical operations for gesture detection.
+- *Source* : Flux vidéo de la webcam (640x480).
+- *Modèle* : MediaPipe (Google) pré-entraîné.
+- *Landmarks* : 21 points clés en 3D par main identifiée.
+- *Fréquence* : Traitement asynchrone pour garantir la fluidité (30+ FPS).
 
-= Features
+= Approches de détection
 
-== Overview of Modes
+== Première approche : Coordonnées Y
 
-Pouce offers three distinct interactive modes:
+Comparer simplement la hauteur du bout du doigt (`TIP`) par rapport à l'articulation précédente (`PIP`).
 
-1. *Energy Ball*: A visual effect tied to finger distance.
-2. *Finger Count*: Real-time counting of extended fingers.
-3. *Air Painter*: Drawing on a virtual canvas using pinch gestures.
+- *Résultats* : Fonctionne bien si la main est parfaitement verticale.
+- *Échec* : Dès que la main tourne (horizontale ou inclinée), la détection s'inverse ou échoue totalement. Ne gère pas
+  le pouce (mouvement latéral).
 
-= Technical Implementation
+== Deuxième approche : Distance au poignet
 
-== Gesture Detection Logic
+Calculer la distance Euclidienne entre le poignet (`WRIST`) et le bout du doigt.
 
-The system identifies gestures by calculating distances and angles between landmarks:
+- *Résultats* : Insensible à la rotation de la main dans le plan de l'image.
+- *Échec* : Le pouce est problématique car son extension ne l'éloigne pas forcément du poignet de manière linéaire par
+  rapport aux autres doigts. Problème de perspective (main face caméra).
 
-- *Pinch Detection*: Measures the Euclidean distance between the thumb tip (landmark 4) and index tip (landmark 8).
-- *Finger Extension*: Uses a combination of angles and relative distances from the wrist to determine if a finger is
-  extended.
+== Troisième approche : Angles et Paume
 
-```python
-def _pinch_distance(hand) -> float:
-    thumb_tip = hand[THUMB_TIP]
-    index_tip = hand[INDEX_TIP]
-    return math.hypot(thumb_tip.x - index_tip.x,
-                      thumb_tip.y - index_tip.y)
-```
+Approche actuelle combinant plusieurs critères :
+1. *Angles* : Calcul de l'angle aux articulations (`MCP-PIP-TIP`). Un doigt est tendu si l'angle est proche de 180°.
+2. *Centre de la paume* : Pour le pouce, on compare sa distance par rapport au centre de la paume (moyenne poignet +
+  index_mcp + pinky_mcp).
+3. *Marge dynamique* : Seuil basé sur la largeur de la paume pour s'adapter à la distance de la caméra.
 
-== Mode 1: Energy Ball
+= Comparaison des approches
 
-Interactive visualization between the thumb and index finger.
+== Tableau récapitulatif
 
-- *Visual*: A glowing ball appears at the midpoint of the pinch.
-- *Interaction*: Pinching triggers a screenshot.
-- *Feedback*: Displays the raw distance value for debugging.
+#table(
+  columns: (auto, auto, auto),
+  inset: 10pt,
+  align: horizon,
+  [*Approche*], [*Avantages*], [*Limites*],
+  [Coordonnées Y], [Simple, rapide], [Sensible à l'orientation],
+  [Distance Poignet], [Stable en rotation], [Échec sur le pouce / perspective],
+  [Angles + Paume], [Robuste, multi-angle], [Plus complexe mathématiquement],
+)
 
-== Mode 2: Finger Count
+= Stack technique
 
-Detects and counts extended fingers on multiple hands.
+== Technologies utilisées
 
-- *Support*: Handles up to 2 hands simultaneously.
-- *Handedness*: Correctly identifies Left vs Right hand.
-- *Precision*: Uses MCP (Metacarpophalangeal) joint angles for accurate extension detection.
+- *Langage* : Python 3.13 (géré par `uv`).
+- *Vision* :
+  - *MediaPipe* : Détection des landmarks.
+  - *OpenCV* : Capture vidéo et rendu de l'interface.
+- *Calcul* : *NumPy* et *Math* pour la géométrie 3D.
+- *Déploiement* : Application locale (portable grâce à l'environnement virtuel).
 
-== Mode 3: Air Painter
+= Défis et Solutions
 
-Turns your hand into a virtual brush.
+== Problèmes rencontrés
 
-- *Draw*: Pinch to start drawing on the screen.
-- *Brush*: Follows the index finger tip.
-- *Clear*: Show all 5 fingers to reset the canvas.
+- *Détection du pouce* : Le pouce a une liberté de mouvement unique.
+  - *Solution* : Utilisation du centre de la paume comme point de référence latéral.
+- *Luminosité* : Le modèle peut perdre la main en contre-jour.
+  - *Solution* : Normalisation des coordonnées par MediaPipe.
+- *Inversion miroir* : La webcam inverse l'image.
+  - *Solution* : Flip horizontal via OpenCV pour une interaction "miroir" naturelle.
+
+= Démo fonctionnelle
+
+== Modes disponibles
+
+1. *Energy Ball* : Visualisation du "pinch" entre pouce et index.
+2. *Air Painter* : Dessin virtuel (Pincer pour dessiner, 5 doigts pour effacer).
+3. *Finger Count* : Compteur de doigts (gère 2 mains simultanément).
+4. *Rock Paper Scissors* : Jeu de Pierre-Feuille-Ciseaux contre l'ordinateur.
