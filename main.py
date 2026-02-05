@@ -1,13 +1,16 @@
 import argparse
 import math
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
 
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.tasks.python.vision import HandLandmarkerResult
 
+# --- Constants ---
 THUMB_TIP = 4
 THUMB_IP = 3
 INDEX_TIP = 8
@@ -16,6 +19,7 @@ FINGER_PIPS = [THUMB_IP, 6, 10, 14, 18]
 FINGER_MCPS = [2, 5, 9, 13, 17]
 
 
+# --- Configuration ---
 @dataclass(frozen=True)
 class Config:
     model_path: str = "hand_landmarker.task"
@@ -26,85 +30,35 @@ class Config:
     brush_thickness: int = 10
 
 
-@dataclass
-class State:
-    landmarks: Optional[Iterable] = None
-    distance: float = 0.0
-    finger_count: int = 0
-    was_pinching: bool = False
-    handedness: Optional[str] = None
-    multi_hand_counts: List[Tuple[str, int]] = None
-    multi_hand_landmarks: List[Iterable] = None
-    canvas: Optional[np.ndarray] = None
-    prev_brush_pos: Optional[Tuple[int, int]] = None
-
-
-class HandApp:
-    def __init__(self, mode: str, config: Config) -> None:
-        self.mode = mode
-        self.config = config
-        self.state = State(multi_hand_counts=[], multi_hand_landmarks=[])
-        if mode == "number":
-            self.window_name = "Finger Count"
-        elif mode == "paint":
-            self.window_name = "Air Painter"
-        else:
-            self.window_name = "Gesture Controller"
-
-    def on_hand_result(self, result, output_image, timestamp_ms) -> None:
-        if self.mode == "number":
-            self._update_multi_hand_counts(result)
-            if not self.state.multi_hand_counts:
-                self._clear_state()
-            return
-
-        hand = self._get_first_hand(result)
-        if hand is None:
-            self._clear_state()
-            return
-
-        self.state.landmarks = hand
-        self.state.handedness = self._get_handedness(result)
-        self.state.distance = self._pinch_distance(hand)
-        if self.mode == "paint":
-            self.state.finger_count = self.count_fingers(hand, self.state.handedness)
-
-    def _clear_state(self) -> None:
-        self.state.landmarks = None
-        self.state.distance = 0.0
-        self.state.finger_count = 0
-        self.state.handedness = None
-        self.state.multi_hand_counts = []
-        self.state.multi_hand_landmarks = []
-        self.state.prev_brush_pos = None
-
+# --- Utility Functions ---
+class HandUtils:
     @staticmethod
-    def _get_first_hand(result):
+    def get_first_hand(result: HandLandmarkerResult):
         if not result.hand_landmarks:
             return None
         return result.hand_landmarks[0]
 
     @staticmethod
-    def _get_handedness(result) -> Optional[str]:
+    def get_handedness(result: HandLandmarkerResult) -> Optional[str]:
         if result.handedness:
             return result.handedness[0][0].category_name
         return None
 
     @staticmethod
-    def _get_all_handedness(result) -> List[str]:
+    def get_all_handedness(result: HandLandmarkerResult) -> List[str]:
         if not result.handedness:
             return []
         return [group[0].category_name for group in result.handedness]
 
     @staticmethod
-    def _pinch_distance(hand) -> float:
+    def calculate_pinch_distance(hand) -> float:
         thumb_tip = hand[THUMB_TIP]
         index_tip = hand[INDEX_TIP]
         return math.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
 
     @staticmethod
-    def count_fingers(hand, handedness) -> int:
-        """Return number of extended fingers using a simple landmark heuristic."""
+    def count_fingers(hand) -> int:
+        """Return number of extended fingers using a landmark heuristic."""
         count = 0
 
         thumb_tip = hand[FINGER_TIPS[0]]
@@ -117,6 +71,10 @@ class HandApp:
         palm_cx = (wrist.x + index_mcp.x + pinky_mcp.x) / 3.0
         palm_cy = (wrist.y + index_mcp.y + pinky_mcp.y) / 3.0
         palm_width = math.hypot(index_mcp.x - pinky_mcp.x, index_mcp.y - pinky_mcp.y)
+        palm_width = max(palm_width, 1e-6)
+        
+        distance_margin = max(palm_width * 0.05, 0.01)
+        side_margin = max(palm_width * 0.15, 0.015)
 
         def dist(a, b) -> float:
             return math.hypot(a.x - b.x, a.y - b.y)
@@ -134,10 +92,7 @@ class HandApp:
             cos_value = max(-1.0, min(1.0, cos_value))
             return math.degrees(math.acos(cos_value))
 
-        palm_width = max(palm_width, 1e-6)
-        distance_margin = max(palm_width * 0.05, 0.01)
-        side_margin = max(palm_width * 0.15, 0.015)
-
+        # Check thumb
         thumb_angle = angle(thumb_mcp, thumb_ip, thumb_tip)
         thumb_extended = (
             thumb_angle > 140.0
@@ -146,89 +101,119 @@ class HandApp:
             > dist_xy(thumb_ip, palm_cx, palm_cy) + distance_margin
         )
         thumb_extended = thumb_extended and (abs(thumb_tip.x - palm_cx) > side_margin)
-
         count += thumb_extended
 
-        def finger_extended(mcp_idx: int, pip_idx: int, tip_idx: int) -> bool:
-            mcp = hand[mcp_idx]
-            pip = hand[pip_idx]
-            tip = hand[tip_idx]
-            return (
-                angle(mcp, pip, tip) > 160.0
-                and dist(tip, wrist) > dist(pip, wrist) + distance_margin
-            )
-
+        # Check other fingers
         for mcp_idx, pip_idx, tip_idx in zip(
             FINGER_MCPS[1:], FINGER_PIPS[1:], FINGER_TIPS[1:]
         ):
-            count += finger_extended(mcp_idx, pip_idx, tip_idx)
+            mcp = hand[mcp_idx]
+            pip = hand[pip_idx]
+            tip = hand[tip_idx]
+            finger_is_extended = (
+                angle(mcp, pip, tip) > 160.0
+                and dist(tip, wrist) > dist(pip, wrist) + distance_margin
+            )
+            count += finger_is_extended
 
         return int(count)
 
-    def draw(self, frame) -> None:
-        if self.mode == "number":
-            self._draw_finger_count(frame)
-            self._draw_finger_tips(frame)
-            self._draw_palms(frame)
-        elif self.mode == "paint":
-            self._draw_canvas(frame)
-            self._draw_brush(frame)
+
+# --- Modes ---
+class BaseMode(ABC):
+    def __init__(self, config: Config):
+        self.config = config
+
+    @property
+    @abstractmethod
+    def num_hands(self) -> int:
+        """Number of hands to detect."""
+        pass
+
+    @property
+    @abstractmethod
+    def window_name(self) -> str:
+        """Window title."""
+        pass
+
+    @property
+    @abstractmethod
+    def intro_message(self) -> str:
+        """Message printed on startup."""
+        pass
+
+    @abstractmethod
+    def on_result(
+        self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int
+    ) -> None:
+        """Callback for MediaPipe results."""
+        pass
+
+    @abstractmethod
+    def process(self, frame: np.ndarray) -> None:
+        """Process logic (e.g., state updates, saving files) per frame."""
+        pass
+
+    @abstractmethod
+    def draw(self, frame: np.ndarray) -> None:
+        """Draw overlays on the frame."""
+        pass
+
+
+class BallMode(BaseMode):
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.landmarks = None
+        self.distance: float = 0.0
+        self.was_pinching: bool = False
+
+    @property
+    def num_hands(self) -> int:
+        return 1
+
+    @property
+    def window_name(self) -> str:
+        return "Gesture Controller"
+
+    @property
+    def intro_message(self) -> str:
+        return "System Ready. Pinch your fingers to take a screenshot!"
+
+    def on_result(
+        self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int
+    ) -> None:
+        hand = HandUtils.get_first_hand(result)
+        if hand:
+            self.landmarks = hand
+            self.distance = HandUtils.calculate_pinch_distance(hand)
         else:
-            self._draw_energy_ball(frame)
+            self.landmarks = None
+            self.distance = 0.0
 
-    def _draw_canvas(self, frame) -> None:
-        if self.state.canvas is not None:
-            # Create a mask of the non-zero pixels in the canvas
-            canvas_gray = cv2.cvtColor(self.state.canvas, cv2.COLOR_BGR2GRAY)
-            _, mask = cv2.threshold(canvas_gray, 10, 255, cv2.THRESH_BINARY)
-            mask_inv = cv2.bitwise_not(mask)
-
-            # Black out the area of the canvas in the frame
-            img_bg = cv2.bitwise_and(frame, frame, mask=mask_inv)
-            # Take only region of canvas from canvas image
-            img_fg = cv2.bitwise_and(self.state.canvas, self.state.canvas, mask=mask)
-
-            # Put canvas on frame
-            np.copyto(frame, cv2.add(img_bg, img_fg))
-
-    def _draw_brush(self, frame) -> None:
-        if not self.state.landmarks:
-            return
-
-        h, w = frame.shape[:2]
-        index = self.state.landmarks[INDEX_TIP]
-        ix, iy = int(index.x * w), int(index.y * h)
-
-        color = self.config.brush_color
-        if self.state.distance < self.config.pinch_threshold:
-            cv2.circle(frame, (ix, iy), self.config.brush_thickness, color, -1)
-        else:
-            cv2.circle(frame, (ix, iy), self.config.brush_thickness, color, 2)
-
-        cv2.putText(
-            frame,
-            "Brush",
-            (ix + 10, iy - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            1,
+    def process(self, frame: np.ndarray) -> None:
+        is_pinching = (
+            self.distance < self.config.pinch_threshold and self.landmarks is not None
         )
+        if is_pinching and not self.was_pinching:
+            filename = f"screenshot_{int(time.time())}.png"
+            cv2.imwrite(filename, frame)
+            print(f"Screenshot saved: {filename}")
+        self.was_pinching = is_pinching
 
-    def _draw_energy_ball(self, frame) -> None:
-        if not self.state.landmarks:
+    def draw(self, frame: np.ndarray) -> None:
+        if not self.landmarks:
             return
 
         h, w = frame.shape[:2]
-        thumb = self.state.landmarks[THUMB_TIP]
-        index = self.state.landmarks[INDEX_TIP]
+        thumb = self.landmarks[THUMB_TIP]
+        index = self.landmarks[INDEX_TIP]
 
         thumb_px = (int(thumb.x * w), int(thumb.y * h))
         index_px = (int(index.x * w), int(index.y * h))
         center = ((thumb_px[0] + index_px[0]) // 2, (thumb_px[1] + index_px[1]) // 2)
-        radius = int(self.state.distance * self.config.radius_scale)
+        radius = int(self.distance * self.config.radius_scale)
 
-        if self.state.distance < self.config.pinch_threshold:
+        if self.distance < self.config.pinch_threshold:
             cv2.circle(frame, center, radius, (0, 255, 0), -1)
             cv2.putText(
                 frame,
@@ -245,7 +230,7 @@ class HandApp:
 
         cv2.putText(
             frame,
-            f"Dist: {self.state.distance:.3f}",
+            f"Dist: {self.distance:.3f}",
             (center[0] - 40, center[1] + radius + 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
@@ -253,8 +238,149 @@ class HandApp:
             1,
         )
 
-    def _draw_finger_count(self, frame) -> None:
-        if not self.state.multi_hand_counts:
+
+class PaintMode(BaseMode):
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.landmarks = None
+        self.distance: float = 0.0
+        self.finger_count: int = 0
+        self.canvas: Optional[np.ndarray] = None
+        self.prev_brush_pos: Optional[Tuple[int, int]] = None
+
+    @property
+    def num_hands(self) -> int:
+        return 1
+
+    @property
+    def window_name(self) -> str:
+        return "Air Painter"
+
+    @property
+    def intro_message(self) -> str:
+        return "System Ready. Pinch to draw, show 5 fingers to clear!"
+
+    def on_result(
+        self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int
+    ) -> None:
+        hand = HandUtils.get_first_hand(result)
+        if hand:
+            self.landmarks = hand
+            self.distance = HandUtils.calculate_pinch_distance(hand)
+            self.finger_count = HandUtils.count_fingers(hand)
+        else:
+            self.landmarks = None
+            self.distance = 0.0
+            self.finger_count = 0
+            self.prev_brush_pos = None
+
+    def process(self, frame: np.ndarray) -> None:
+        if self.canvas is None:
+            self.canvas = np.zeros_like(frame)
+
+        if not self.landmarks:
+            self.prev_brush_pos = None
+            return
+
+        h, w = frame.shape[:2]
+        index = self.landmarks[INDEX_TIP]
+        ix, iy = int(index.x * w), int(index.y * h)
+
+        if self.distance < self.config.pinch_threshold:
+            if self.prev_brush_pos is not None:
+                cv2.line(
+                    self.canvas,
+                    self.prev_brush_pos,
+                    (ix, iy),
+                    self.config.brush_color,
+                    self.config.brush_thickness,
+                )
+            self.prev_brush_pos = (ix, iy)
+        else:
+            self.prev_brush_pos = None
+
+        if self.finger_count >= 5:
+            self.canvas = np.zeros_like(frame)
+
+    def draw(self, frame: np.ndarray) -> None:
+        self._draw_canvas(frame)
+        self._draw_brush(frame)
+
+    def _draw_canvas(self, frame: np.ndarray) -> None:
+        if self.canvas is not None:
+            canvas_gray = cv2.cvtColor(self.canvas, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(canvas_gray, 10, 255, cv2.THRESH_BINARY)
+            mask_inv = cv2.bitwise_not(mask)
+            img_bg = cv2.bitwise_and(frame, frame, mask=mask_inv)
+            img_fg = cv2.bitwise_and(self.canvas, self.canvas, mask=mask)
+            np.copyto(frame, cv2.add(img_bg, img_fg))
+
+    def _draw_brush(self, frame: np.ndarray) -> None:
+        if not self.landmarks:
+            return
+
+        h, w = frame.shape[:2]
+        index = self.landmarks[INDEX_TIP]
+        ix, iy = int(index.x * w), int(index.y * h)
+        color = self.config.brush_color
+
+        if self.distance < self.config.pinch_threshold:
+            cv2.circle(frame, (ix, iy), self.config.brush_thickness, color, -1)
+        else:
+            cv2.circle(frame, (ix, iy), self.config.brush_thickness, color, 2)
+
+        cv2.putText(
+            frame,
+            "Brush",
+            (ix + 10, iy - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            1,
+        )
+
+
+class NumberMode(BaseMode):
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.multi_hand_counts: List[Tuple[str, int]] = []
+        self.multi_hand_landmarks: List[Iterable] = []
+
+    @property
+    def num_hands(self) -> int:
+        return 2
+
+    @property
+    def window_name(self) -> str:
+        return "Finger Count"
+
+    @property
+    def intro_message(self) -> str:
+        return "System Ready. Show fingers to display a number!"
+
+    def on_result(
+        self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int
+    ) -> None:
+        hands = result.hand_landmarks or []
+        labels = HandUtils.get_all_handedness(result)
+        counts: List[Tuple[str, int]] = []
+        for idx, hand in enumerate(hands):
+            label = labels[idx] if idx < len(labels) else f"Hand {idx + 1}"
+            counts.append((label, HandUtils.count_fingers(hand)))
+        
+        self.multi_hand_counts = counts
+        self.multi_hand_landmarks = hands
+
+    def process(self, frame: np.ndarray) -> None:
+        pass  # No specific processing logic for NumberMode
+
+    def draw(self, frame: np.ndarray) -> None:
+        self._draw_finger_count(frame)
+        self._draw_finger_tips(frame)
+        self._draw_palms(frame)
+
+    def _draw_finger_count(self, frame: np.ndarray) -> None:
+        if not self.multi_hand_counts:
             cv2.putText(
                 frame,
                 "No hand detected",
@@ -267,7 +393,7 @@ class HandApp:
             return
 
         y = 50
-        for label, count in self.state.multi_hand_counts:
+        for label, count in self.multi_hand_counts:
             cv2.putText(
                 frame,
                 f"{label}: {count}",
@@ -279,15 +405,12 @@ class HandApp:
             )
             y += 40
 
-    def _draw_finger_tips(self, frame) -> None:
-        hands = self.state.multi_hand_landmarks
-        if not hands and self.state.landmarks is not None:
-            hands = [self.state.landmarks]
-        if not hands:
+    def _draw_finger_tips(self, frame: np.ndarray) -> None:
+        if not self.multi_hand_landmarks:
             return
 
         h, w = frame.shape[:2]
-        for hand in hands:
+        for hand in self.multi_hand_landmarks:
             for idx in FINGER_TIPS:
                 lm = hand[idx]
                 x, y = int(lm.x * w), int(lm.y * h)
@@ -302,15 +425,12 @@ class HandApp:
                     2,
                 )
 
-    def _draw_palms(self, frame) -> None:
-        hands = self.state.multi_hand_landmarks
-        if not hands and self.state.landmarks is not None:
-            hands = [self.state.landmarks]
-        if not hands:
+    def _draw_palms(self, frame: np.ndarray) -> None:
+        if not self.multi_hand_landmarks:
             return
 
         h, w = frame.shape[:2]
-        for hand in hands:
+        for hand in self.multi_hand_landmarks:
             wrist = hand[0]
             index_mcp = hand[5]
             pinky_mcp = hand[17]
@@ -328,101 +448,53 @@ class HandApp:
                 2,
             )
 
-    def process(self, frame) -> None:
-        if self.mode == "ball":
-            is_pinching = (
-                self.state.distance < self.config.pinch_threshold
-                and self.state.landmarks is not None
-            )
-            if is_pinching and not self.state.was_pinching:
-                filename = f"screenshot_{int(time.time())}.png"
-                cv2.imwrite(filename, frame)
-                print(f"Screenshot saved: {filename}")
-            self.state.was_pinching = is_pinching
-        elif self.mode == "paint":
-            if self.state.canvas is None:
-                self.state.canvas = np.zeros_like(frame)
 
-            if not self.state.landmarks:
-                self.state.prev_brush_pos = None
-                return
-
-            h, w = frame.shape[:2]
-            index = self.state.landmarks[INDEX_TIP]
-            ix, iy = int(index.x * w), int(index.y * h)
-
-            if self.state.distance < self.config.pinch_threshold:
-                if self.state.prev_brush_pos is not None:
-                    cv2.line(
-                        self.state.canvas,
-                        self.state.prev_brush_pos,
-                        (ix, iy),
-                        self.config.brush_color,
-                        self.config.brush_thickness,
-                    )
-                self.state.prev_brush_pos = (ix, iy)
-            else:
-                self.state.prev_brush_pos = None
-
-            if self.state.finger_count >= 5:
-                self.state.canvas = np.zeros_like(frame)
+# --- Main Application ---
+class HandApp:
+    def __init__(self, mode: BaseMode) -> None:
+        self.mode = mode
 
     def run(self) -> None:
-        num_hands = 2 if self.mode == "number" else 1
         options = mp.tasks.vision.HandLandmarkerOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=self.config.model_path),
+            base_options=mp.tasks.BaseOptions(model_asset_path=self.mode.config.model_path),
             running_mode=mp.tasks.vision.RunningMode.LIVE_STREAM,
-            result_callback=self.on_hand_result,
-            num_hands=num_hands,
+            result_callback=self.mode.on_result,
+            num_hands=self.mode.num_hands,
         )
 
-        with mp.tasks.vision.HandLandmarker.create_from_options(options) as landmarker:
-            cap = cv2.VideoCapture(self.config.camera_index)
-            if not cap.isOpened():
-                print("Error: Could not open webcam.")
-                return
+        try:
+            with mp.tasks.vision.HandLandmarker.create_from_options(options) as landmarker:
+                cap = cv2.VideoCapture(self.mode.config.camera_index)
+                if not cap.isOpened():
+                    print("Error: Could not open webcam.")
+                    return
 
-            start_time = time.monotonic()
-            if self.mode == "ball":
-                print("System Ready. Pinch your fingers to take a screenshot!")
-            elif self.mode == "paint":
-                print("System Ready. Pinch to draw, show 5 fingers to clear!")
-            else:
-                print("System Ready. Show fingers to display a number!")
+                print(self.mode.intro_message)
+                start_time = time.monotonic()
 
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-                frame = cv2.flip(frame, 1)
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                    frame = cv2.flip(frame, 1)
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-                timestamp_ms = int((time.monotonic() - start_time) * 1000)
-                landmarker.detect_async(mp_image, timestamp_ms)
+                    timestamp_ms = int((time.monotonic() - start_time) * 1000)
+                    landmarker.detect_async(mp_image, timestamp_ms)
 
-                self.process(frame)
-                self.draw(frame)
+                    self.mode.process(frame)
+                    self.mode.draw(frame)
 
-                cv2.imshow(self.window_name, frame)
-                if cv2.waitKey(1) == ord("q"):
-                    break
+                    cv2.imshow(self.mode.window_name, frame)
+                    if cv2.waitKey(1) == ord("q"):
+                        break
 
-            cap.release()
-            cv2.destroyAllWindows()
-
-    def _update_multi_hand_counts(self, result) -> None:
-        hands = result.hand_landmarks or []
-        labels = self._get_all_handedness(result)
-        counts: List[Tuple[str, int]] = []
-        for idx, hand in enumerate(hands):
-            label = labels[idx] if idx < len(labels) else f"Hand {idx + 1}"
-            counts.append((label, self.count_fingers(hand, label)))
-        self.state.multi_hand_counts = counts
-        self.state.multi_hand_landmarks = hands
-        if hands:
-            self.state.landmarks = hands[0]
+                cap.release()
+                cv2.destroyAllWindows()
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
 
 def parse_args():
@@ -438,7 +510,16 @@ def parse_args():
 
 def main() -> None:
     args = parse_args()
-    app = HandApp(args.mode, Config())
+    config = Config()
+    
+    modes = {
+        "ball": BallMode,
+        "number": NumberMode,
+        "paint": PaintMode,
+    }
+    
+    mode_class = modes.get(args.mode, BallMode)
+    app = HandApp(mode_class(config))
     app.run()
 
 
