@@ -46,6 +46,7 @@
 
 Run the application using `uv`:
 
+#### CLI Version
 ```bash
 # Default mode (Ball/Screenshot)
 uv run main.py
@@ -60,7 +61,12 @@ uv run main.py --mode number
 uv run main.py --mode rps
 ```
 
-Press **'q'** to quit the application.
+#### Web Version (Streamlit)
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+Press **'q'** to quit the CLI application. For the web version, use the "Stop" button or close the browser tab.
 
 ## 🧠 How it Works
 

@@ -4,4 +4,10 @@ version = "0.1.0"
 description = "Real-time hand gesture control interface using MediaPipe and OpenCV"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["mediapipe>=0.10.32", "opencv-python>=4.13.0.90"]
+dependencies = [
+    "av>=16.1.0",
+    "mediapipe>=0.10.32",
+    "opencv-python>=4.13.0.90",
+    "streamlit>=1.54.0",
+    "streamlit-webrtc>=0.64.5",
+]

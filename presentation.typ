@@ -79,8 +79,11 @@ Approche actuelle combinant plusieurs critères :
 - *Vision* :
   - *MediaPipe* : Détection des landmarks.
   - *OpenCV* : Capture vidéo et rendu de l'interface.
+- *Interface* :
+  - *Streamlit* : Dashboard interactif web.
+  - *Streamlit-webrtc* : Streaming vidéo temps réel dans le navigateur.
 - *Calcul* : *NumPy* et *Math* pour la géométrie 3D.
-- *Déploiement* : Application locale (portable grâce à l'environnement virtuel).
+- *Déploiement* : Application locale ou web.
 
 = Défis et Solutions
 
@@ -95,9 +98,14 @@ Approche actuelle combinant plusieurs critères :
 
 = Démo fonctionnelle
 
+== Interfaces
+
+- *Version CLI* : Interface OpenCV classique pour une performance maximale.
+- *Version Web* : Interface Streamlit moderne, accessible via navigateur, facilitant le changement de mode.
+
 == Modes disponibles
 
-1. *Energy Ball* : Visualisation du "pinch" entre pouce et index.
+1. *Energy Ball* : Visualisation du "pinch" entre pouce et index (capture d'écran automatique).
 2. *Air Painter* : Dessin virtuel (Pincer pour dessiner, 5 doigts pour effacer).
 3. *Finger Count* : Compteur de doigts (gère 2 mains simultanément).
 4. *Rock Paper Scissors* : Jeu de Pierre-Feuille-Ciseaux contre l'ordinateur.
