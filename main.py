@@ -9,7 +9,10 @@ from typing import Iterable, List, Optional, Tuple
 import cv2
 import mediapipe as mp
 import numpy as np
+import sys
 from mediapipe.tasks.python.vision import HandLandmarkerResult
+
+CAMERA_BACKEND = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
 
 # --- Constants ---
 THUMB_TIP = 4
@@ -73,7 +76,7 @@ class HandUtils:
         palm_cy = (wrist.y + index_mcp.y + pinky_mcp.y) / 3.0
         palm_width = math.hypot(index_mcp.x - pinky_mcp.x, index_mcp.y - pinky_mcp.y)
         palm_width = max(palm_width, 1e-6)
-        
+
         distance_margin = max(palm_width * 0.05, 0.01)
         side_margin = max(palm_width * 0.15, 0.015)
 
@@ -373,7 +376,7 @@ class NumberMode(BaseMode):
         for idx, hand in enumerate(hands):
             label = labels[idx] if idx < len(labels) else f"Hand {idx + 1}"
             counts.append((label, HandUtils.count_fingers(hand)))
-        
+
         self.multi_hand_counts = counts
         self.multi_hand_landmarks = hands
 
@@ -492,12 +495,12 @@ class RockPaperScissorsMode(BaseMode):
 
     def process(self, frame: np.ndarray) -> None:
         current_time = time.time()
-        
+
         if self.state == "WAITING":
             if self.landmarks:
                 self.state = "COUNTDOWN"
                 self.timer_start = current_time
-        
+
         elif self.state == "COUNTDOWN":
             elapsed = current_time - self.timer_start
             if elapsed >= 3.0:
@@ -515,7 +518,7 @@ class RockPaperScissorsMode(BaseMode):
 
     def _play_round(self):
         count = sum(self.finger_states)
-        
+
         # Improved detection logic: Rock (0-1), Scissors (2-3), Paper (5)
         if count in [0, 1]:
             self.player_move = "Rock"
@@ -539,9 +542,11 @@ class RockPaperScissorsMode(BaseMode):
 
         if self.player_move == self.cpu_move:
             self.result_text = "Draw!"
-        elif (self.player_move == "Rock" and self.cpu_move == "Scissors") or \
-             (self.player_move == "Paper" and self.cpu_move == "Rock") or \
-             (self.player_move == "Scissors" and self.cpu_move == "Paper"):
+        elif (
+            (self.player_move == "Rock" and self.cpu_move == "Scissors")
+            or (self.player_move == "Paper" and self.cpu_move == "Rock")
+            or (self.player_move == "Scissors" and self.cpu_move == "Paper")
+        ):
             self.result_text = "You Win!"
             self.scores["Player"] += 1
         else:
@@ -551,41 +556,89 @@ class RockPaperScissorsMode(BaseMode):
     def draw(self, frame: np.ndarray) -> None:
         h, w = frame.shape[:2]
         center_x, center_y = w // 2, h // 2
-        
+
         self._draw_debug(frame)
 
         # Draw Score
         score_str = f"Player: {self.scores['Player']}  CPU: {self.scores['CPU']}"
-        cv2.putText(frame, score_str, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        cv2.putText(
+            frame, score_str, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2
+        )
 
         if self.state == "WAITING":
-            cv2.putText(frame, "Show hand to start", (center_x - 150, center_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
+            cv2.putText(
+                frame,
+                "Show hand to start",
+                (center_x - 150, center_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (200, 200, 200),
+                2,
+            )
 
         elif self.state == "COUNTDOWN":
             elapsed = time.time() - self.timer_start
             count = 3 - int(elapsed)
             if count > 0:
-                cv2.putText(frame, str(count), (center_x - 20, center_y), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 255), 5)
+                cv2.putText(
+                    frame,
+                    str(count),
+                    (center_x - 20, center_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    4,
+                    (0, 255, 255),
+                    5,
+                )
             else:
-                 cv2.putText(frame, "GO!", (center_x - 60, center_y), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 255, 0), 5)
+                cv2.putText(
+                    frame,
+                    "GO!",
+                    (center_x - 60, center_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    4,
+                    (0, 255, 0),
+                    5,
+                )
 
         elif self.state == "SHOW_RESULT":
-            cv2.putText(frame, f"You: {self.player_move}", (50, h - 100), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(frame, f"CPU: {self.cpu_move}", (w - 300, h - 100), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            
+            cv2.putText(
+                frame,
+                f"You: {self.player_move}",
+                (50, h - 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 0),
+                2,
+            )
+            cv2.putText(
+                frame,
+                f"CPU: {self.cpu_move}",
+                (w - 300, h - 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 0, 255),
+                2,
+            )
+
             color = (255, 255, 255)
-            if "Win" in self.result_text: color = (0, 255, 0)
-            elif "CPU Wins" in self.result_text: color = (0, 0, 255)
-            
-            text_size = cv2.getTextSize(self.result_text, cv2.FONT_HERSHEY_SIMPLEX, 2, 3)[0]
+            if "Win" in self.result_text:
+                color = (0, 255, 0)
+            elif "CPU Wins" in self.result_text:
+                color = (0, 0, 255)
+
+            text_size = cv2.getTextSize(
+                self.result_text, cv2.FONT_HERSHEY_SIMPLEX, 2, 3
+            )[0]
             text_x = (w - text_size[0]) // 2
-            cv2.putText(frame, self.result_text, (text_x, center_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 2, color, 3)
+            cv2.putText(
+                frame,
+                self.result_text,
+                (text_x, center_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                2,
+                color,
+                3,
+            )
 
     def _draw_debug(self, frame: np.ndarray) -> None:
         if not self.landmarks:
@@ -593,8 +646,15 @@ class RockPaperScissorsMode(BaseMode):
 
         h, w = frame.shape[:2]
         count = sum(self.finger_states)
-        cv2.putText(frame, f"Fingers: {count}", (20, h - 20), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(
+            frame,
+            f"Fingers: {count}",
+            (20, h - 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 255),
+            2,
+        )
 
         for idx, extended in enumerate(self.finger_states):
             lm_idx = FINGER_TIPS[idx]
@@ -612,15 +672,19 @@ class HandApp:
 
     def run(self) -> None:
         options = mp.tasks.vision.HandLandmarkerOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=self.mode.config.model_path),
+            base_options=mp.tasks.BaseOptions(
+                model_asset_path=self.mode.config.model_path
+            ),
             running_mode=mp.tasks.vision.RunningMode.LIVE_STREAM,
             result_callback=self.mode.on_result,
             num_hands=self.mode.num_hands,
         )
 
         try:
-            with mp.tasks.vision.HandLandmarker.create_from_options(options) as landmarker:
-                cap = cv2.VideoCapture(self.mode.config.camera_index)
+            with mp.tasks.vision.HandLandmarker.create_from_options(
+                options
+            ) as landmarker:
+                cap = cv2.VideoCapture(self.mode.config.camera_index, CAMERA_BACKEND)
                 if not cap.isOpened():
                     print("Error: Could not open webcam.")
                     return
@@ -635,7 +699,9 @@ class HandApp:
 
                     frame = cv2.flip(frame, 1)
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                    mp_image = mp.Image(
+                        image_format=mp.ImageFormat.SRGB, data=frame_rgb
+                    )
 
                     timestamp_ms = int((time.monotonic() - start_time) * 1000)
                     landmarker.detect_async(mp_image, timestamp_ms)
@@ -667,14 +733,14 @@ def parse_args():
 def main() -> None:
     args = parse_args()
     config = Config()
-    
+
     modes = {
         "ball": BallMode,
         "number": NumberMode,
         "paint": PaintMode,
         "rps": RockPaperScissorsMode,
     }
-    
+
     mode_class = modes.get(args.mode, BallMode)
     app = HandApp(mode_class(config))
     app.run()
