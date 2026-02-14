@@ -1,8 +1,0 @@
-__pycache__/
-.venv/
-.git/
-.github/
-*.png
-*.jpg
-*.jpeg
-# Do NOT ignore uv.lock, it is required for --frozen installs
