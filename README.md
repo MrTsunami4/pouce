@@ -10,6 +10,8 @@
   - **Air Painter (`paint`)**: Draw in the air! Pinch to spray paint, and show all 5 fingers to clear the canvas.
   - **Finger Count (`number`)**: Real-time finger counting for up to two hands simultaneously.
   - **Rock Paper Scissors (`rps`)**: Play the classic game against the CPU with a 3-second countdown.
+  - **Virtual Mouse (`mouse`)**: Control your cursor with hand movements. Pinch to click, use two hands to drag.
+  - **Camera Zoom (`zoom`)**: Use two hands to zoom. Spread apart to zoom in, pinch together to zoom out.
 - **High Performance**: Optimized using asynchronous MediaPipe processing for 30+ FPS fluid interaction.
 
 ## 🛠️ Tech Stack
@@ -59,6 +61,12 @@ uv run main.py --mode number
 
 # Rock Paper Scissors mode
 uv run main.py --mode rps
+
+# Virtual Mouse mode
+uv run main.py --mode mouse
+
+# Camera Zoom mode
+uv run main.py --mode zoom
 ```
 
 #### Web Version (Streamlit)

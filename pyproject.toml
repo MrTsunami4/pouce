@@ -8,6 +8,8 @@ dependencies = [
     "av>=16.1.0",
     "mediapipe>=0.10.32",
     "opencv-python>=4.13.0.90",
+    "pyautogui>=0.9.54",
+    "simpleaudio>=1.0.4",
     "streamlit>=1.54.0",
     "streamlit-webrtc>=0.64.5",
 ]

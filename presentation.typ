@@ -6,7 +6,7 @@
   date: "05.02.2026",
   title-color: blue,
   ratio: 16 / 9,
-  layout: "medium",
+  layout: "small",
   toc: true,
   count: "dot",
   footer: true,
@@ -109,3 +109,5 @@ Approche actuelle combinant plusieurs critères :
 2. *Air Painter* : Dessin virtuel (Pincer pour dessiner, 5 doigts pour effacer).
 3. *Finger Count* : Compteur de doigts (gère 2 mains simultanément).
 4. *Rock Paper Scissors* : Jeu de Pierre-Feuille-Ciseaux contre l'ordinateur.
+5. *Virtual Mouse* : Contrôle du curseur avec la main (pincer pour cliquer, 2 mains pour déplacer).
+6. *Camera Zoom* : Zoom avec deux mains (écarter pour zoomer, pincer pour dézoomer).
